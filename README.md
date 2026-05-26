@@ -2,11 +2,12 @@
 
 ## Status: **WORKING** ✓
 
-Enrollment and verify confirmed working on real hardware (2026-03-10).
+Enrollment and verify confirmed working on real hardware (2026-05-26).
 
 ## Hardware
 
-[TNP Nano USB Fingerprint Reader](https://www.amazon.com/dp/B07DW62XS7) (Amazon)
+[TNP Nano USB Fingerprint Reader](https://www.amazon.com/dp/B07DW62XS7) (Amazon US)  
+[TNP Nano USB Fingerprint Reader](https://www.amazon.co.uk/TNP-Fingerprint-Reader-Windows-Hello/dp/B07DW62XS7/) (Amazon UK)
 
 <img src="docs/tnp-nano-usb-fingerprint-reader.jpg" width="200" alt="TNP Nano USB Fingerprint Reader">
 
@@ -45,26 +46,78 @@ See [Reverse Engineering](docs/reverse-engineering.md) for how to reproduce.
 - The required number of GenChar samples for RegModel is `DAT_180032020 / 3`clamped to \[3, 6\]. For this device the value is 6.
 - Extra GET_IMAGE calls between GenChars corrupt the device's char buffer state. The `waiting_for_lift` approach must minimize GET_IMAGE polling between captures.
 
-## Build
+## Instructions
+1. Update your machine
 
 ```bash
-./build.sh
+sudo apt update
 ```
 
-Copies `src/microarray.c` into the libfprint source tree (`$LIBFPRINT_SRC`, defaults to `~/libfprint`), builds with ninja, and installs the shared library.
-
-## Testing
+2. Install all required tools/libraries
 
 ```bash
+sudo apt install -y git build-essential meson ninja-build \
+  pkg-config libglib2.0-dev libgusb-dev libgudev-1.0-dev \
+  libpixman-1-dev libnss3-dev libssl-dev libcairo2-dev \
+  libgirepository1.0-dev gtk-doc-tools \
+  fprintd libpam-fprintd
+  ```
+
+3. Clone the official libfprint source code to ~/libfprint directory
+
+```bash
+git clone https://gitlab.freedesktop.org/libfprint/libfprint.git ~/libfprint
+```
+
+4. Manually create the microarray directory
+
+```bash
+cd ~/libfprint
+mkdir -p libfprint/drivers/microarray
+meson setup build
+```
+
+5. Copy this repo
+
+```bash
+git clone https://github.com/jdillon/libfprint-microarray.git ~/libfprint-microarray
+```
+
+6. Make changes to ~/libfprint
+
+```bash
+# copy fixed meson.build file over to other library
+cp ~/libfprint-microarray/meson.build ~/libfprint/libfprint/meson.build
+cp ~/libfprint-microarray/src/microarray.c ~/libfprint/libfprint/drivers/microarray/microarray.c
+
+cd ~/libfprint/build
+meson configure -Ddrivers=all
+ninja
+sudo cp libfprint/libfprint-2.so.2.0.0 /usr/lib/x86_64-linux-gnu/libfprint-2.so.2
+sudo cp libfprint/libfprint-2.so.2.0.0 /usr/lib/libfprint-2.so.2
+sudo ldconfig
+sudo udevadm control --reload-rules && sudo udevadm trigger
+#sudo systemctl enable --now fprintd
+```
+
+## Testing
+```bash
+
+# Restart daemon
+sudo systemctl stop fprintd
+sudo G_MESSAGES_DEBUG=all /usr/libexec/fprintd -t 2>&1
+
 # Enroll right index finger (6 press/lift cycles)
 fprintd-enroll -f right-index-finger
 
 # Verify
 fprintd-verify -f right-index-finger
 
-# Debug logging
-sudo G_MESSAGES_DEBUG=all /usr/libexec/fprintd -t 2>&1
 ```
+
+**If there is a future update of libfprint, re-running Step (6) above should make everything work again.**
+
+
 
 ## License
 
