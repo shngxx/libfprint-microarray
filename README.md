@@ -47,7 +47,7 @@ See [Reverse Engineering](docs/reverse-engineering.md) for how to reproduce.
 - Extra GET_IMAGE calls between GenChars corrupt the device's char buffer state. The `waiting_for_lift` approach must minimize GET_IMAGE polling between captures.
 
 ## Instructions
-1. Update your machine
+1. Plug in device & update your machine
 
 ```bash
 sudo apt update
@@ -66,6 +66,7 @@ sudo apt install -y git build-essential meson ninja-build \
 3. Clone the official libfprint source code to ~/libfprint directory
 
 ```bash
+rm -rf ~/libfprint
 git clone https://gitlab.freedesktop.org/libfprint/libfprint.git ~/libfprint
 ```
 
@@ -80,6 +81,7 @@ meson setup build
 5. Copy this repo
 
 ```bash
+rm -rf ~/libfprint-microarray/
 git clone https://github.com/jadegamesuk/libfprint-microarray.git ~/libfprint-microarray
 ```
 
@@ -115,6 +117,18 @@ fprintd-enroll -f right-index-finger
 
 # Verify
 fprintd-verify -f right-index-finger
+
+# Options for [finger]:
+left-thumb
+left-index-finger
+left-middle-finger
+left-ring-finger
+left-little-finger
+right-thumb
+right-index-finger
+right-middle-finger
+right-ring-finger
+right-little-finger
 ```
 
 **If there is a future update of libfprint, re-running Step (6) above should make everything work again.**
