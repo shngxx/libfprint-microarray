@@ -420,25 +420,38 @@ enroll_run_state (FpiSsm *ssm, FpDevice *device)
         break;
 
     case ENROLL_EMPTY: {
-        /* Check bitmap from pre-enrollment ReadIndex */
+        /* Check bitmap from pre-enrollment ReadIndex to find a free slot */
         const guint8 *resp = self->resp_buf + MA_OVERHEAD;
+        self->fid = -1;
+
         if (resp[0] == 0x00) {
             for (int byte = 0; byte < 4 && self->fid < 0; byte++) {
                 for (int bit = 0; bit < 8; bit++) {
+                    int candidate_slot = byte * 8 + bit;
+                    
+                    /* STRICT CAP: Your chip only supports up to slot 9 (10 fingers total) */
+                    if (candidate_slot > 9) {
+                        break; 
+                    }
+                    
+                    /* If this bit is 0, the slot is empty! Let's claim it. */
                     if (!(resp[1 + byte] & (1 << bit))) {
-                        self->fid = byte * 8 + bit;
+                        self->fid = candidate_slot;
                         break;
                     }
                 }
             }
         }
-        if (self->fid >= 0) {
-            fp_dbg ("FID slot %d free, skipping Empty", self->fid);
+
+        /* If we found a valid free slot (0-9), skip erasing and proceed to scan */
+        if (self->fid >= 0 && self->fid <= 9) {
+            fp_dbg ("Found free FID slot %d. Proceeding to image capture.", self->fid);
             fpi_ssm_jump_to_state (ssm, ENROLL_GET_IMAGE);
             return;
         }
-        /* No free slots — erase all templates, use slot 0 */
-        fp_dbg ("no free FID slots, clearing all templates (CMD 0x0D)");
+
+        /* FALLBACK: If slots 0-9 are completely full, nuke the chip to start fresh */
+        fp_dbg ("Storage slots 0-9 are completely full! Clearing all templates.");
         self->fid = 0;
         cmd[0] = MA_CMD_EMPTY;
         ma_submit_cmd (ssm, device, cmd, 1);
