@@ -80,7 +80,7 @@ meson setup build
 5. Copy this repo
 
 ```bash
-git clone https://github.com/jdillon/libfprint-microarray.git ~/libfprint-microarray
+git clone https://github.com/jadegamesuk/libfprint-microarray.git ~/libfprint-microarray
 ```
 
 6. Make changes to ~/libfprint
@@ -102,17 +102,19 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 ## Testing
 ```bash
-
 # Restart daemon
 sudo systemctl stop fprintd
 sudo G_MESSAGES_DEBUG=all /usr/libexec/fprintd -t 2>&1
+```
 
+### Open a new Terminal Window for the following
+
+```bash
 # Enroll right index finger (6 press/lift cycles)
 fprintd-enroll -f right-index-finger
 
 # Verify
 fprintd-verify -f right-index-finger
-
 ```
 
 **If there is a future update of libfprint, re-running Step (6) above should make everything work again.**
