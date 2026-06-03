@@ -761,6 +761,14 @@ identify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
 }
 
 static void
+ma_verify (FpDevice *device)
+{
+    /* Your original verify state machine launcher */
+    FpiSsm *ssm = fpi_ssm_new (device, verify_run_state, VERIFY_NUM_STATES);
+    fpi_ssm_start (ssm, verify_ssm_done);
+}
+
+static void
 ma_identify (FpDevice *device)
 {
     FpiSsm *ssm = fpi_ssm_new (device, identify_run_state, IDENTIFY_NUM_STATES);
@@ -863,6 +871,7 @@ fpi_device_microarray_class_init (FpiDeviceMicroarrayClass *klass)
     dev_class->open     = ma_dev_open;
     dev_class->close    = ma_dev_close;
     dev_class->enroll   = ma_enroll;
+    dev_class->verify   = ma_verify;
     dev_class->identify = ma_identify;
     dev_class->delete   = ma_delete;
 
