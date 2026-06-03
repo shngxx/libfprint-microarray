@@ -312,7 +312,7 @@ cmd_send_cb (FpiUsbTransfer *transfer, FpDevice *device,
     fpi_ssm_next_state (ssm);
 }
 
-/* Submit a bulk-OUT command */
+/* Submit a bulk-OUT command with cancellation support */
 static void
 ma_submit_cmd (FpiSsm *ssm, FpDevice *device,
                const guint8 *cmd, gsize cmd_len)
@@ -323,23 +323,29 @@ ma_submit_cmd (FpiSsm *ssm, FpDevice *device,
     transfer->ssm = ssm;
     fpi_usb_transfer_fill_bulk_full (transfer, MA_EP_OUT,
                                      pkt, pkt_len, g_free);
-    fpi_usb_transfer_submit (transfer, MA_TIMEOUT_CMD, NULL,
+    
+    /* Swap NULL out for fpi_device_get_cancellable  */
+    fpi_usb_transfer_submit (transfer, MA_TIMEOUT_CMD, 
+                             fpi_device_get_cancellable (device),
                              cmd_send_cb, ssm);
 }
 
-/* Submit a bulk-IN read into self->resp_buf */
+/* Submit a bulk-IN read with cancellation support */
 static void
 ma_submit_recv (FpiSsm *ssm, FpDevice *device, gsize expect_len)
 {
     FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
     FpiUsbTransfer *transfer = fpi_usb_transfer_new (device);
     transfer->ssm = ssm;
-    /* Point transfer buffer at our persistent resp_buf */
     fpi_usb_transfer_fill_bulk_full (transfer, MA_EP_IN,
                                      self->resp_buf, expect_len, NULL);
-    fpi_usb_transfer_submit (transfer, MA_TIMEOUT_CMD, NULL,
+    
+    /* Swap NULL out for fpi_device_get_cancellable  */
+    fpi_usb_transfer_submit (transfer, MA_TIMEOUT_CMD, 
+                             fpi_device_get_cancellable (device),
                              cmd_recv_cb, ssm);
 }
+
 
 /* --------------------------------------------------------------------------
  * Enroll state machine
