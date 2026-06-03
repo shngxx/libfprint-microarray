@@ -627,7 +627,7 @@ ma_enroll (FpDevice *device)
 }
 
 /* --------------------------------------------------------------------------
- * Verify state machine
+ * Identify state machine
  * -------------------------------------------------------------------------- */
 
 enum {
@@ -641,7 +641,7 @@ enum {
 };
 
 static void
-verify_run_state (FpiSsm *ssm, FpDevice *device)
+identify_run_state (FpiSsm *ssm, FpDevice *device)
 {
     FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
     guint8 cmd[8];
@@ -665,38 +665,30 @@ verify_run_state (FpiSsm *ssm, FpDevice *device)
         }
         fpi_device_report_finger_status (device, FP_FINGER_STATUS_PRESENT);
         cmd[0] = MA_CMD_GEN_CHAR;
-        cmd[1] = 0x01;   /* use char buffer slot 1 for verification */
+        cmd[1] = 0x01;   /* extract image into temporary processing slot 1 */
         ma_submit_cmd (ssm, device, cmd, 2);
         break;
 
-    case VERIFY_RECV_GEN_CHAR:
+    case IDENTIFY_RECV_GEN_CHAR:
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
 
-case VERIFY_SEARCH: {
+    case IDENTIFY_SEARCH: 
         if (self->resp_buf[MA_OVERHEAD] != 0x00) {
             fpi_ssm_mark_failed (ssm,
                 fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL));
             return;
         }
-        /* Get FID from enrolled print */
-        FpPrint *print = NULL;
-        fpi_device_get_verify_data (device, &print);
-        GVariant *data = NULL;
-        g_object_get (print, "fpi-data", &data, NULL);
-        gint fid = 0;
-        g_variant_get (data, "(i)", &fid);
-        self->fid = fid;
-
-        /* CMD 0x66 fid_hi fid_lo — verify against specific FID */
+        
+        /* Global database search command parameter payload */
         cmd[0] = MA_CMD_SEARCH;
-        cmd[1] = (guint8)(self->fid >> 8);
-        cmd[2] = (guint8)(self->fid & 0xFF);
+        cmd[1] = 0x00;   /* 0x00 0x00 instructs firmware to scan slots 0-9 */
+        cmd[2] = 0x00;   
         ma_submit_cmd (ssm, device, cmd, 3);
         break;
-    }
-    
-    case VERIFY_RECV_SEARCH:
+
+    case IDENTIFY_RECV_SEARCH:
+        /* Read back response packet payload */
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
 
@@ -706,29 +698,67 @@ case VERIFY_SEARCH: {
 }
 
 static void
-verify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
+identify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
 {
     FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
 
     fpi_device_report_finger_status (device, FP_FINGER_STATUS_NONE);
 
     if (error) {
-        /* Could be a retry error */
-        fpi_device_verify_complete (device, error);
+        fpi_device_identify_complete (device, error);
         return;
     }
 
-    FpPrint *print = NULL;
-    fpi_device_get_verify_data (device, &print);
-
     guint8 status = self->resp_buf[MA_OVERHEAD];
+
     if (status == 0x00) {
-        fpi_device_verify_report (device, FPI_MATCH_SUCCESS, print, NULL);
+        /* Success! The chip matched a finger.
+         * The firmware response packet structure contains the matched slot ID:
+         * resp_buf[MA_OVERHEAD + 1] = High byte of matched slot
+         * resp_buf[MA_OVERHEAD + 2] = Low byte of matched slot
+         */
+        gint matched_fid = ((gint)self->resp_buf[MA_OVERHEAD + 1] << 8) | 
+                            (gint)self->resp_buf[MA_OVERHEAD + 2];
+        
+        fp_dbg ("Hardware match found on storage slot ID: %d", matched_fid);
+
+        /* Search the operating system's internal DB array to find the FpPrint 
+         * file matching this exact hardware storage slot ID.
+         */
+        GPtrArray *prints = NULL;
+        FpPrint *match = NULL;
+        
+        fpi_device_get_identify_data (device, &prints);
+
+        for (guint i = 0; i < prints->len; i++) {
+            FpPrint *print = g_ptr_array_index (prints, i);
+            GVariant *data = NULL;
+            g_object_get (print, "fpi-data", &data, NULL);
+            
+            if (data) {
+                gint fid = -1;
+                g_variant_get (data, "(i)", &fid);
+                g_variant_unref (data);
+                
+                if (fid == matched_fid) {
+                    match = print; /* We found the matching OS template file wrapper! */
+                    break;
+                }
+            }
+        }
+
+        if (match) {
+            fpi_device_identify_report (device, match, NULL, NULL);
+        } else {
+            fp_dbg ("Matched hardware slot %d, but no matching local profile file found", matched_fid);
+            fpi_device_identify_report (device, NULL, NULL, NULL);
+        }
     } else {
-        fp_dbg ("Search result: 0x%02x (no match)", status);
-        fpi_device_verify_report (device, FPI_MATCH_FAIL, print, NULL);
+        fp_dbg ("Global search complete: No matching finger found (0x%02x)", status);
+        fpi_device_identify_report (device, NULL, NULL, NULL);
     }
-    fpi_device_verify_complete (device, NULL);
+
+    fpi_device_identify_complete (device, NULL);
 }
 
 static void
@@ -736,7 +766,7 @@ ma_verify (FpDevice *device)
 {
     FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
     self->fid = -1;
-    FpiSsm *ssm = fpi_ssm_new (device, verify_run_state, VERIFY_NUM_STATES);
+    FpiSsm *ssm = fpi_ssm_new (device, identify_run_state, IDENTIFY_NUM_STATES);
     fpi_ssm_start (ssm, verify_ssm_done);
 }
 
@@ -833,11 +863,11 @@ fpi_device_microarray_class_init (FpiDeviceMicroarrayClass *klass)
     dev_class->nr_enroll_stages = MA_ENROLL_SAMPLES;
     dev_class->scan_type        = FP_SCAN_TYPE_PRESS;
 
-    dev_class->open   = ma_dev_open;
-    dev_class->close  = ma_dev_close;
-    dev_class->enroll = ma_enroll;
-    dev_class->verify = ma_verify;
-    dev_class->delete = ma_delete;
+    dev_class->open     = ma_dev_open;
+    dev_class->close    = ma_dev_close;
+    dev_class->enroll   = ma_enroll;
+    dev_class->identify = ma_identify;
+    dev_class->delete   = ma_delete;
 
     fpi_device_class_auto_initialize_features (dev_class);
 }
