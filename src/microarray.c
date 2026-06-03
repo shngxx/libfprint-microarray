@@ -542,11 +542,14 @@ verify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
         return;
     }
 
-    /* 0x00 from the chip indicates a successful hardware match */
+    /* Check if the chip gave us a 0x00 status indicating a hardware match */
     gboolean matched = (self->resp_buf[MA_OVERHEAD] == 0x00);
     
-    /* libfprint expects just the device and a boolean (TRUE for match, FALSE for retry) */
-    fpi_device_verify_report (device, matched);
+    /* Use libfprint's matching enums instead of booleans */
+    FpMatchResult result = matched ? FPI_MATCH_SUCCESS : FPI_MATCH_FAIL;
+
+    /* Pass the device, the enum result, and NULL for the extra driver data */
+    fpi_device_verify_report (device, result, NULL);
     
     fpi_device_verify_complete (device, NULL);
 }
