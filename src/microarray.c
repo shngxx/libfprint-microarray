@@ -7,9 +7,9 @@
  * protocol (same packet framing as the R30X hobbyist module series).
  *
  * Endpoints:
- *   EP 0x03  OUT bulk  — commands to device
- *   EP 0x83  IN  bulk  — responses from device
- *   EP 0x82  IN  intr  — finger-detect events (used for waiting)
+ * EP 0x03  OUT bulk  — commands to device
+ * EP 0x83  IN  bulk  — responses from device
+ * EP 0x82  IN  intr  — finger-detect events (used for waiting)
  *
  * Copyright (C) 2024  <jason@localhost>
  * SPDX-License-Identifier: LGPL-2.1-or-later
@@ -84,41 +84,21 @@ G_DEFINE_TYPE (FpiDeviceMicroarray, fpi_device_microarray, FP_TYPE_DEVICE)
  * Packet helpers
  * -------------------------------------------------------------------------- */
 
-/*
- * Build a framed FPC command packet.
- * Returns a newly allocated guint8 buffer (caller must g_free).
- * Sets *out_len to the total packet length.
- *
- * Format:
- *   EF 01 FF FF FF FF [type=01] [len_hi] [len_lo] [cmd_bytes...] [csum_hi] [csum_lo]
- * where len = cmd_len + 2  (payload + 2-byte checksum)
- */
 static guint8 *
 ma_build_cmd (const guint8 *cmd, gsize cmd_len, gsize *out_len)
 {
     gsize total = MA_OVERHEAD + cmd_len + 2; /* 2 checksum bytes */
     guint8 *pkt = g_malloc (total);
 
-    /* sync + address */
-    pkt[0] = 0xEF;
-    pkt[1] = 0x01;
-    pkt[2] = 0xFF;
-    pkt[3] = 0xFF;
-    pkt[4] = 0xFF;
-    pkt[5] = 0xFF;
-
-    /* packet type */
+    pkt[0] = 0xEF; pkt[1] = 0x01; pkt[2] = 0xFF; pkt[3] = 0xFF; pkt[4] = 0xFF; pkt[5] = 0xFF;
     pkt[6] = MA_PKT_CMD;
 
-    /* length = cmd_len + 2 (big-endian) */
     guint16 len = (guint16)(cmd_len + 2);
     pkt[7] = (guint8)(len >> 8);
     pkt[8] = (guint8)(len & 0xFF);
 
-    /* command payload */
     memcpy (pkt + 9, cmd, cmd_len);
 
-    /* 16-bit checksum: sum of bytes [6 .. 9+cmd_len-1] */
     guint16 csum = 0;
     for (gsize i = 6; i < 9 + cmd_len; i++)
         csum += pkt[i];
@@ -129,50 +109,39 @@ ma_build_cmd (const guint8 *cmd, gsize cmd_len, gsize *out_len)
     return pkt;
 }
 
-/*
- * Parse an FPC response packet.
- * Returns TRUE if header/checksum valid; resp_data and resp_data_len
- * point into buf (not copied).
- */
 static gboolean
 ma_parse_resp (const guint8 *buf, gsize buf_len,
                const guint8 **data_out, gsize *data_len_out,
                GError **error)
 {
     if (buf_len < (gsize)(MA_OVERHEAD + 2)) {
-        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                             "Response too short");
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Response too short");
         return FALSE;
     }
     if (buf[0] != 0xEF || buf[1] != 0x01) {
-        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                             "Bad sync header");
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Bad sync header");
         return FALSE;
     }
     if (buf[6] != MA_PKT_ACK) {
-        g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                     "Expected ACK (0x07), got 0x%02x", buf[6]);
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Expected ACK (0x07), got 0x%02x", buf[6]);
         return FALSE;
     }
     guint16 len  = ((guint16)buf[7] << 8) | buf[8];
     gsize expected = (gsize)MA_OVERHEAD + len;
     if (buf_len < expected) {
-        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                             "Response truncated");
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Response truncated");
         return FALSE;
     }
-    /* verify checksum: sum of bytes [6 .. expected-3] */
     guint16 csum = 0;
     for (gsize i = 6; i < expected - 2; i++)
         csum += buf[i];
     guint16 got = ((guint16)buf[expected-2] << 8) | buf[expected-1];
     if (csum != got) {
-        g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                     "Checksum mismatch: want 0x%04x got 0x%04x", csum, got);
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Checksum mismatch");
         return FALSE;
     }
     *data_out     = buf + MA_OVERHEAD;
-    *data_len_out = (gsize)(len - 2);   /* strip 2 checksum bytes */
+    *data_len_out = (gsize)(len - 2);
     return TRUE;
 }
 
@@ -187,29 +156,23 @@ enum {
 };
 
 static void
-init_recv_cb (FpiUsbTransfer *transfer, FpDevice *device,
-              gpointer user_data, GError *error)
+init_recv_cb (FpiUsbTransfer *transfer, FpDevice *device, gpointer user_data, GError *error)
 {
     FpiSsm *ssm = user_data;
     if (error) {
         fpi_ssm_mark_failed (ssm, error);
         return;
     }
-    /* Basic handshake response check: just verify header bytes */
-    if (transfer->actual_length >= 2 &&
-        transfer->buffer[0] == 0xEF && transfer->buffer[1] == 0x01) {
+    if (transfer->actual_length >= 2 && transfer->buffer[0] == 0xEF && transfer->buffer[1] == 0x01) {
         fp_dbg ("Handshake OK");
         fpi_ssm_mark_completed (ssm);
     } else {
-        fpi_ssm_mark_failed (ssm,
-            fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO,
-                                      "Handshake response invalid"));
+        fpi_ssm_mark_failed (ssm, fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO, "Handshake response invalid"));
     }
 }
 
 static void
-init_send_cb (FpiUsbTransfer *transfer, FpDevice *device,
-              gpointer user_data, GError *error)
+init_send_cb (FpiUsbTransfer *transfer, FpDevice *device, gpointer user_data, GError *error)
 {
     FpiSsm *ssm = user_data;
     if (error) {
@@ -222,26 +185,21 @@ init_send_cb (FpiUsbTransfer *transfer, FpDevice *device,
 static void
 init_run_state (FpiSsm *ssm, FpDevice *device)
 {
-    FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
     FpiUsbTransfer *transfer;
-
     switch (fpi_ssm_get_cur_state (ssm)) {
     case INIT_SEND_HANDSHAKE: {
         guint8 *buf = g_memdup2 (MA_HANDSHAKE_PKT, MA_HANDSHAKE_PKT_LEN);
         transfer = fpi_usb_transfer_new (device);
         transfer->ssm = ssm;
-        fpi_usb_transfer_fill_bulk_full (transfer, MA_EP_OUT,
-                                         buf, MA_HANDSHAKE_PKT_LEN, g_free);
-        fpi_usb_transfer_submit (transfer, MA_TIMEOUT_CMD, NULL,
-                                 init_send_cb, ssm);
+        fpi_usb_transfer_fill_bulk_full (transfer, MA_EP_OUT, buf, MA_HANDSHAKE_PKT_LEN, g_free);
+        fpi_usb_transfer_submit (transfer, MA_TIMEOUT_CMD, fpi_device_get_cancellable (device), init_send_cb, ssm);
         break;
     }
     case INIT_RECV_HANDSHAKE:
         transfer = fpi_usb_transfer_new (device);
         transfer->ssm = ssm;
         fpi_usb_transfer_fill_bulk (transfer, MA_EP_IN, MA_HANDSHAKE_RESP_LEN);
-        fpi_usb_transfer_submit (transfer, MA_TIMEOUT_CMD, NULL,
-                                 init_recv_cb, ssm);
+        fpi_usb_transfer_submit (transfer, MA_TIMEOUT_CMD, fpi_device_get_cancellable (device), init_recv_cb, ssm);
         break;
     default:
         g_assert_not_reached ();
@@ -258,13 +216,10 @@ static void
 ma_dev_open (FpDevice *device)
 {
     GError *error = NULL;
-
-    if (!g_usb_device_claim_interface (fpi_device_get_usb_device (device),
-                                       0, 0, &error)) {
+    if (!g_usb_device_claim_interface (fpi_device_get_usb_device (device), 0, 0, &error)) {
         fpi_device_open_complete (device, error);
         return;
     }
-
     FpiSsm *ssm = fpi_ssm_new (device, init_run_state, INIT_NUM_STATES);
     fpi_ssm_start (ssm, init_ssm_done);
 }
@@ -273,8 +228,7 @@ static void
 ma_dev_close (FpDevice *device)
 {
     GError *error = NULL;
-    g_usb_device_release_interface (fpi_device_get_usb_device (device),
-                                    0, 0, &error);
+    g_usb_device_release_interface (fpi_device_get_usb_device (device), 0, 0, &error);
     fpi_device_close_complete (device, error);
 }
 
@@ -282,15 +236,8 @@ ma_dev_close (FpDevice *device)
  * Generic command send/receive helpers
  * -------------------------------------------------------------------------- */
 
-/*
- * Sends a framed command and reads back the response into self->resp_buf.
- * On completion, calls fpi_ssm_next_state (ssm).
- * The caller is responsible for checking self->resp_buf[0] afterward.
- */
-
 static void
-cmd_recv_cb (FpiUsbTransfer *transfer, FpDevice *device,
-             gpointer user_data, GError *error)
+cmd_recv_cb (FpiUsbTransfer *transfer, FpDevice *device, gpointer user_data, GError *error)
 {
     FpiSsm *ssm = user_data;
     if (error) {
@@ -301,8 +248,7 @@ cmd_recv_cb (FpiUsbTransfer *transfer, FpDevice *device,
 }
 
 static void
-cmd_send_cb (FpiUsbTransfer *transfer, FpDevice *device,
-             gpointer user_data, GError *error)
+cmd_send_cb (FpiUsbTransfer *transfer, FpDevice *device, gpointer user_data, GError *error)
 {
     FpiSsm *ssm = user_data;
     if (error) {
@@ -312,64 +258,37 @@ cmd_send_cb (FpiUsbTransfer *transfer, FpDevice *device,
     fpi_ssm_next_state (ssm);
 }
 
-/* Submit a bulk-OUT command with cancellation support */
 static void
-ma_submit_cmd (FpiSsm *ssm, FpDevice *device,
-               const guint8 *cmd, gsize cmd_len)
+ma_submit_cmd (FpiSsm *ssm, FpDevice *device, const guint8 *cmd, gsize cmd_len)
 {
     gsize pkt_len;
     guint8 *pkt = ma_build_cmd (cmd, cmd_len, &pkt_len);
     FpiUsbTransfer *transfer = fpi_usb_transfer_new (device);
     transfer->ssm = ssm;
-    fpi_usb_transfer_fill_bulk_full (transfer, MA_EP_OUT,
-                                     pkt, pkt_len, g_free);
-    
-    /* Swap NULL out for fpi_device_get_cancellable  */
-    fpi_usb_transfer_submit (transfer, MA_TIMEOUT_CMD, 
-                             fpi_device_get_cancellable (device),
-                             cmd_send_cb, ssm);
+    fpi_usb_transfer_fill_bulk_full (transfer, MA_EP_OUT, pkt, pkt_len, g_free);
+    fpi_usb_transfer_submit (transfer, MA_TIMEOUT_CMD, fpi_device_get_cancellable (device), cmd_send_cb, ssm);
 }
 
-/* Submit a bulk-IN read with cancellation support */
 static void
 ma_submit_recv (FpiSsm *ssm, FpDevice *device, gsize expect_len)
 {
     FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
     FpiUsbTransfer *transfer = fpi_usb_transfer_new (device);
     transfer->ssm = ssm;
-    fpi_usb_transfer_fill_bulk_full (transfer, MA_EP_IN,
-                                     self->resp_buf, expect_len, NULL);
-    
-    /* Swap NULL out for fpi_device_get_cancellable  */
-    fpi_usb_transfer_submit (transfer, MA_TIMEOUT_CMD, 
-                             fpi_device_get_cancellable (device),
-                             cmd_recv_cb, ssm);
+    fpi_usb_transfer_fill_bulk_full (transfer, MA_EP_IN, self->resp_buf, expect_len, NULL);
+    fpi_usb_transfer_submit (transfer, MA_TIMEOUT_CMD, fpi_device_get_cancellable (device), cmd_recv_cb, ssm);
 }
-
 
 /* --------------------------------------------------------------------------
  * Enroll state machine
- * --------------------------------------------------------------------------
- *
- *  Pre-enrollment:
- *    ENROLL_HANDSHAKE / RECV      — reset device session
- *    ENROLL_READ_INDEX_PRE / RECV — CMD 0x1F: read FID bitmap
- *    ENROLL_EMPTY / RECV          — CMD 0x0D: only if all 30 slots full
- *
- *  Loop MA_ENROLL_SAMPLES times:
- *    ENROLL_GET_IMAGE / RECV      — CMD 0x01: poll until finger present
- *    ENROLL_GEN_CHAR / RECV       — CMD 0x02: extract features into char buffer
- *
- *  Complete:
- *    ENROLL_REG_MODEL / RECV      — CMD 0x05: merge char buffers into template
- *    ENROLL_STORE_CHAR / RECV     — CMD 0x06: store to self->fid (set in pre-check)
- */
+ * -------------------------------------------------------------------------- */
+
 enum {
-    ENROLL_HANDSHAKE,            /* session reset — must call before every enrollment */
+    ENROLL_HANDSHAKE,
     ENROLL_RECV_HANDSHAKE,
-    ENROLL_READ_INDEX_PRE,       /* CMD 0x1F — find free FID slot before starting */
+    ENROLL_READ_INDEX_PRE,
     ENROLL_RECV_READ_INDEX_PRE,
-    ENROLL_EMPTY,                /* CMD 0x0D — only if no free slot found */
+    ENROLL_EMPTY,
     ENROLL_RECV_EMPTY,
     ENROLL_GET_IMAGE,
     ENROLL_RECV_IMAGE,
@@ -396,51 +315,36 @@ enroll_run_state (FpiSsm *ssm, FpDevice *device)
     guint8 cmd[8];
 
     switch (fpi_ssm_get_cur_state (ssm)) {
-
     case ENROLL_HANDSHAKE: {
         guint8 *buf = g_memdup2 (MA_HANDSHAKE_PKT, MA_HANDSHAKE_PKT_LEN);
         FpiUsbTransfer *t = fpi_usb_transfer_new (device);
         t->ssm = ssm;
-        fpi_usb_transfer_fill_bulk_full (t, MA_EP_OUT,
-                                         buf, MA_HANDSHAKE_PKT_LEN, g_free);
-        fpi_usb_transfer_submit (t, MA_TIMEOUT_CMD, NULL, cmd_send_cb, ssm);
+        fpi_usb_transfer_fill_bulk_full (t, MA_EP_OUT, buf, MA_HANDSHAKE_PKT_LEN, g_free);
+        fpi_usb_transfer_submit (t, MA_TIMEOUT_CMD, fpi_device_get_cancellable (device), cmd_send_cb, ssm);
         break;
     }
-
     case ENROLL_RECV_HANDSHAKE: {
         FpiUsbTransfer *t = fpi_usb_transfer_new (device);
         t->ssm = ssm;
         fpi_usb_transfer_fill_bulk (t, MA_EP_IN, MA_HANDSHAKE_RESP_LEN);
-        fpi_usb_transfer_submit (t, MA_TIMEOUT_CMD, NULL, cmd_recv_cb, ssm);
+        fpi_usb_transfer_submit (t, MA_TIMEOUT_CMD, fpi_device_get_cancellable (device), cmd_recv_cb, ssm);
         break;
     }
-
     case ENROLL_READ_INDEX_PRE:
-        cmd[0] = MA_CMD_READ_INDEX;
-        cmd[1] = 0x00;
+        cmd[0] = MA_CMD_READ_INDEX; cmd[1] = 0x00;
         ma_submit_cmd (ssm, device, cmd, 2);
         break;
-
     case ENROLL_RECV_READ_INDEX_PRE:
         ma_submit_recv (ssm, device, MA_OVERHEAD + 35 + 2);
         break;
-
     case ENROLL_EMPTY: {
-        /* Check bitmap from pre-enrollment ReadIndex to find a free slot */
         const guint8 *resp = self->resp_buf + MA_OVERHEAD;
         self->fid = -1;
-
         if (resp[0] == 0x00) {
             for (int byte = 0; byte < 4 && self->fid < 0; byte++) {
                 for (int bit = 0; bit < 8; bit++) {
                     int candidate_slot = byte * 8 + bit;
-                    
-                    /* STRICT CAP: Your chip only supports up to slot 9 (10 fingers total) */
-                    if (candidate_slot > 9) {
-                        break; 
-                    }
-                    
-                    /* If this bit is 0, the slot is empty! Let's claim it. */
+                    if (candidate_slot > 9) break;
                     if (!(resp[1 + byte] & (1 << bit))) {
                         self->fid = candidate_slot;
                         break;
@@ -448,95 +352,53 @@ enroll_run_state (FpiSsm *ssm, FpDevice *device)
                 }
             }
         }
-
-        /* If we found a valid free slot (0-9), skip erasing and proceed to scan */
         if (self->fid >= 0 && self->fid <= 9) {
             fp_dbg ("Found free FID slot %d. Proceeding to image capture.", self->fid);
             fpi_ssm_jump_to_state (ssm, ENROLL_GET_IMAGE);
             return;
         }
-
-        /* FALLBACK: If slots 0-9 are completely full, nuke the chip to start fresh */
-        fp_dbg ("Storage slots 0-9 are completely full! Clearing all templates.");
-        self->fid = 0;
-        cmd[0] = MA_CMD_EMPTY;
+        fp_dbg ("Storage slots 0-9 full! Clearing all templates.");
+        self->fid = 0; cmd[0] = MA_CMD_EMPTY;
         ma_submit_cmd (ssm, device, cmd, 1);
         break;
     }
-
     case ENROLL_RECV_EMPTY:
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
-
     case ENROLL_GET_IMAGE:
         cmd[0] = MA_CMD_GET_IMAGE;
         ma_submit_cmd (ssm, device, cmd, 1);
         break;
-
     case ENROLL_RECV_IMAGE:
-        /* Response: 3 bytes payload, resp[0]=0 means image captured */
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
-
     case ENROLL_GEN_CHAR:
         if (self->resp_buf[MA_OVERHEAD] != 0x00) {
-            /* No image (finger absent or sensor not ready) */
             if (self->waiting_for_lift) {
-                /* Finger was just lifted — ready for next press */
                 self->waiting_for_lift = FALSE;
                 fpi_device_report_finger_status (device, FP_FINGER_STATUS_NONE);
                 fp_dbg ("Finger lifted, waiting for next press");
             }
-            fp_dbg ("GetImage not ready (0x%02x), retrying",
-                    self->resp_buf[MA_OVERHEAD]);
             g_timeout_add (100, poll_get_image_cb, ssm);
             return;
         }
         if (self->waiting_for_lift) {
-            /* Finger still down from previous capture — keep waiting */
-            fp_dbg ("Waiting for finger lift...");
             g_timeout_add (100, poll_get_image_cb, ssm);
             return;
         }
-        /* New finger press with valid image — proceed */
         fpi_device_report_finger_status (device, FP_FINGER_STATUS_PRESENT);
-        cmd[0] = MA_CMD_GEN_CHAR;
-        cmd[1] = (guint8)(self->enroll_stage + 1);
+        cmd[0] = MA_CMD_GEN_CHAR; cmd[1] = (guint8)(self->enroll_stage + 1);
         ma_submit_cmd (ssm, device, cmd, 2);
         break;
-
-    case ENROLL_RECV_GEN_CHAR: {
+    case ENROLL_RECV_GEN_CHAR:
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
-        /* Note: actual check happens in the callback; we use a simple approach
-         * of checking after state transitions */
-        /* Advance stage in next state entry */
         break;
-    }
-
-    /* We need to handle the stage increment after recv; do it via a dummy state
-     * by just checking here at the start of the NEXT state. But since we can't
-     * do that cleanly without extra states, we check at GEN_CHAR entry above.
-     *
-     * For stage counting: we increment after a successful GEN_CHAR recv.
-     * Since recv state just does the USB and moves to next state, we increment
-     * in REG_MODEL entry until stages are done.
-     *
-     * Simpler: jump back to GET_IMAGE if stage < SAMPLES, else fall through.
-     * We do the increment and check at ENROLL_REG_MODEL entry. */
-
     case ENROLL_REG_MODEL:
-        /* Check GenChar result and count sample */
-        fp_dbg ("GenChar resp[0]=0x%02x stage=%d",
-                self->resp_buf[MA_OVERHEAD], self->enroll_stage);
         if (self->resp_buf[MA_OVERHEAD] == 0x00) {
             self->enroll_stage++;
-            fp_dbg ("stage %d / %d OK", self->enroll_stage, MA_ENROLL_SAMPLES);
             fpi_device_enroll_progress (device, self->enroll_stage, NULL, NULL);
         } else {
-            g_warning ("microarray: GenChar failed (0x%02x), retrying stage",
-                       self->resp_buf[MA_OVERHEAD]);
-            fpi_device_enroll_progress (device, self->enroll_stage, NULL,
-                                        fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL));
+            fpi_device_enroll_progress (device, self->enroll_stage, NULL, fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL));
             self->waiting_for_lift = TRUE;
             fpi_ssm_jump_to_state (ssm, ENROLL_GET_IMAGE);
             return;
@@ -546,40 +408,24 @@ enroll_run_state (FpiSsm *ssm, FpDevice *device)
             fpi_ssm_jump_to_state (ssm, ENROLL_GET_IMAGE);
             return;
         }
-        fp_dbg ("all samples collected, sending RegModel (CMD 0x05)");
         cmd[0] = MA_CMD_REG_MODEL;
         ma_submit_cmd (ssm, device, cmd, 1);
         break;
-
     case ENROLL_RECV_REG_MODEL:
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
-
     case ENROLL_STORE_CHAR:
-        /* Check RegModel result */
-        fp_dbg ("RegModel resp[0]=0x%02x, storing to FID slot %d",
-                self->resp_buf[MA_OVERHEAD], self->fid);
         if (self->resp_buf[MA_OVERHEAD] != 0x00) {
-            g_warning ("microarray: RegModel FAILED with 0x%02x",
-                       self->resp_buf[MA_OVERHEAD]);
-            fpi_ssm_mark_failed (ssm,
-                fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
-                                          "RegModel failed: 0x%02x",
-                                          self->resp_buf[MA_OVERHEAD]));
+            fpi_ssm_mark_failed (ssm, fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL, "RegModel failed"));
             return;
         }
-        /* self->fid was set during pre-enrollment ReadIndex or after Empty */
-        cmd[0] = MA_CMD_STORE_CHAR;
-        cmd[1] = 0x01;
-        cmd[2] = (guint8)(self->fid >> 8);
-        cmd[3] = (guint8)(self->fid & 0xFF);
+        cmd[0] = MA_CMD_STORE_CHAR; cmd[1] = 0x01;
+        cmd[2] = (guint8)(self->fid >> 8); cmd[3] = (guint8)(self->fid & 0xFF);
         ma_submit_cmd (ssm, device, cmd, 4);
         break;
-
     case ENROLL_RECV_STORE_CHAR:
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
-
     default:
         g_assert_not_reached ();
     }
@@ -589,20 +435,14 @@ static void
 enroll_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
 {
     FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
-
     if (error) {
         fpi_device_enroll_complete (device, NULL, error);
         return;
     }
     if (self->resp_buf[MA_OVERHEAD] != 0x00) {
-        fpi_device_enroll_complete (device, NULL,
-            fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
-                                      "StoreChar failed: 0x%02x",
-                                      self->resp_buf[MA_OVERHEAD]));
+        fpi_device_enroll_complete (device, NULL, fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL, "StoreChar failed"));
         return;
     }
-
-    /* Build an FpPrint encoding the FID */
     FpPrint *print = NULL;
     fpi_device_get_enroll_data (device, &print);
     fpi_print_set_type (print, FPI_PRINT_RAW);
@@ -619,15 +459,96 @@ static void
 ma_enroll (FpDevice *device)
 {
     FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
-    self->enroll_stage = 0;
-    self->fid = -1;
-    self->waiting_for_lift = FALSE;
+    self->enroll_stage = 0; self->fid = -1; self->waiting_for_lift = FALSE;
     FpiSsm *ssm = fpi_ssm_new (device, enroll_run_state, ENROLL_NUM_STATES);
     fpi_ssm_start (ssm, enroll_ssm_done);
 }
 
 /* --------------------------------------------------------------------------
- * Identify state machine
+ * Verify state machine (Explicit single-finger validation)
+ * -------------------------------------------------------------------------- */
+
+enum {
+    VERIFY_GET_IMAGE,
+    VERIFY_RECV_IMAGE,
+    VERIFY_GEN_CHAR,
+    VERIFY_RECV_GEN_CHAR,
+    VERIFY_SEARCH,
+    VERIFY_RECV_SEARCH,
+    VERIFY_NUM_STATES,
+};
+
+static void
+verify_run_state (FpiSsm *ssm, FpDevice *device)
+{
+    FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
+    guint8 cmd[8];
+
+    switch (fpi_ssm_get_cur_state (ssm)) {
+    case VERIFY_GET_IMAGE:
+        cmd[0] = MA_CMD_GET_IMAGE;
+        ma_submit_cmd (ssm, device, cmd, 1);
+        break;
+    case VERIFY_RECV_IMAGE:
+        ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
+        break;
+    case VERIFY_GEN_CHAR:
+        if (self->resp_buf[MA_OVERHEAD] != 0x00) {
+            fpi_ssm_jump_to_state (ssm, VERIFY_GET_IMAGE);
+            return;
+        }
+        fpi_device_report_finger_status (device, FP_FINGER_STATUS_PRESENT);
+        cmd[0] = MA_CMD_GEN_CHAR; cmd[1] = 0x01;
+        ma_submit_cmd (ssm, device, cmd, 2);
+        break;
+    case VERIFY_RECV_GEN_CHAR:
+        ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
+        break;
+    case VERIFY_SEARCH: {
+        if (self->resp_buf[MA_OVERHEAD] != 0x00) {
+            fpi_ssm_mark_failed (ssm, fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL));
+            return;
+        }
+        FpPrint *print = NULL;
+        fpi_device_get_verify_data (device, &print);
+        GVariant *data = NULL;
+        g_object_get (print, "fpi-data", &data, NULL);
+        gint fid = 0;
+        g_variant_get (data, "(i)", &fid);
+        g_variant_unref (data);
+        self->fid = fid;
+
+        cmd[0] = MA_CMD_SEARCH;
+        cmd[1] = (guint8)(self->fid >> 8); cmd[2] = (guint8)(self->fid & 0xFF);
+        ma_submit_cmd (ssm, device, cmd, 3);
+        break;
+    }
+    case VERIFY_RECV_SEARCH:
+        ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
+        break;
+    default:
+        g_assert_not_reached ();
+    }
+}
+
+static void
+verify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
+{
+    FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
+    fpi_device_report_finger_status (device, FP_FINGER_STATUS_NONE);
+
+    if (error) {
+        fpi_device_verify_complete (device, error);
+        return;
+    }
+
+    gboolean matched = (self->resp_buf[MA_OVERHEAD] == 0x00);
+    fpi_device_verify_report (device, matched ? FP_VERIFY_MATCH : FP_VERIFY_RETRY, NULL, NULL, NULL);
+    fpi_device_verify_complete (device, NULL);
+}
+
+/* --------------------------------------------------------------------------
+ * Identify state machine (Device-wide global search for sudo)
  * -------------------------------------------------------------------------- */
 
 enum {
@@ -647,16 +568,13 @@ identify_run_state (FpiSsm *ssm, FpDevice *device)
     guint8 cmd[8];
 
     switch (fpi_ssm_get_cur_state (ssm)) {
-
     case IDENTIFY_GET_IMAGE:
         cmd[0] = MA_CMD_GET_IMAGE;
         ma_submit_cmd (ssm, device, cmd, 1);
         break;
-
     case IDENTIFY_RECV_IMAGE:
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
-
     case IDENTIFY_GEN_CHAR:
         if (self->resp_buf[MA_OVERHEAD] != 0x00) {
             fp_dbg ("GetImage not ready, retrying");
@@ -664,33 +582,23 @@ identify_run_state (FpiSsm *ssm, FpDevice *device)
             return;
         }
         fpi_device_report_finger_status (device, FP_FINGER_STATUS_PRESENT);
-        cmd[0] = MA_CMD_GEN_CHAR;
-        cmd[1] = 0x01;   /* extract image into temporary processing slot 1 */
+        cmd[0] = MA_CMD_GEN_CHAR; cmd[1] = 0x01;
         ma_submit_cmd (ssm, device, cmd, 2);
         break;
-
     case IDENTIFY_RECV_GEN_CHAR:
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
-
     case IDENTIFY_SEARCH:
         if (self->resp_buf[MA_OVERHEAD] != 0x00) {
             fpi_ssm_mark_failed (ssm, fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL));
             return;
         }
-
-        /* Global database search command parameter payload */
-        cmd[0] = MA_CMD_SEARCH;
-        cmd[1] = 0x00;   /* 0x00 0x00 instructs firmware to scan slots 0-9 */
-        cmd[2] = 0x00;   
+        cmd[0] = MA_CMD_SEARCH; cmd[1] = 0x00; cmd[2] = 0x00;   
         ma_submit_cmd (ssm, device, cmd, 3);
         break;
-
     case IDENTIFY_RECV_SEARCH:
-        /* Read back response packet payload */
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
-
     default:
         g_assert_not_reached ();
     }
@@ -700,7 +608,6 @@ static void
 identify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
 {
     FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
-
     fpi_device_report_finger_status (device, FP_FINGER_STATUS_NONE);
 
     if (error) {
@@ -709,61 +616,42 @@ identify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
     }
 
     guint8 status = self->resp_buf[MA_OVERHEAD];
-    
     if (status == 0x00) {
-        /* Success! The chip matched a finger.
-         * The firmware response packet structure contains the matched slot ID:
-         * resp_buf[MA_OVERHEAD + 1] = High byte of matched slot
-         * resp_buf[MA_OVERHEAD + 2] = Low byte of matched slot
-         */
-        gint matched_fid = ((gint)self->resp_buf[MA_OVERHEAD + 1] << 8) | 
-                            (gint)self->resp_buf[MA_OVERHEAD + 2];
-        
+        gint matched_fid = ((gint)self->resp_buf[MA_OVERHEAD + 1] << 8) | (gint)self->resp_buf[MA_OVERHEAD + 2];
         fp_dbg ("Hardware match found on storage slot ID: %d", matched_fid);
 
-        /* Search the operating system's internal DB array to find the FpPrint 
-         * file matching this exact hardware storage slot ID.
-         */
         GPtrArray *prints = NULL;
         FpPrint *match = NULL;
-        
         fpi_device_get_identify_data (device, &prints);
 
         for (guint i = 0; i < prints->len; i++) {
             FpPrint *print = g_ptr_array_index (prints, i);
             GVariant *data = NULL;
             g_object_get (print, "fpi-data", &data, NULL);
-            
             if (data) {
                 gint fid = -1;
                 g_variant_get (data, "(i)", &fid);
                 g_variant_unref (data);
-                
                 if (fid == matched_fid) {
-                    match = print; /* We found the matching OS template file wrapper! */
+                    match = print;
                     break;
                 }
             }
         }
-
         if (match) {
             fpi_device_identify_report (device, match, NULL, NULL);
         } else {
-            fp_dbg ("Matched hardware slot %d, but no matching local profile file found", matched_fid);
             fpi_device_identify_report (device, NULL, NULL, NULL);
         }
     } else {
-        fp_dbg ("Global search complete: No matching finger found (0x%02x)", status);
         fpi_device_identify_report (device, NULL, NULL, NULL);
     }
-
     fpi_device_identify_complete (device, NULL);
 }
 
 static void
 ma_verify (FpDevice *device)
 {
-    /* Your original verify state machine launcher */
     FpiSsm *ssm = fpi_ssm_new (device, verify_run_state, VERIFY_NUM_STATES);
     fpi_ssm_start (ssm, verify_ssm_done);
 }
@@ -780,7 +668,7 @@ ma_identify (FpDevice *device)
  * -------------------------------------------------------------------------- */
 
 enum {
-    DELETE_EMPTY,        /* CMD 0x0D — running onboard sensor flash format */
+    DELETE_EMPTY,
     DELETE_RECV_EMPTY,
     DELETE_NUM_STATES,
 };
@@ -789,18 +677,14 @@ static void
 delete_run_state (FpiSsm *ssm, FpDevice *device)
 {
     guint8 cmd[1];
-
     switch (fpi_ssm_get_cur_state (ssm)) {
-
     case DELETE_EMPTY:
         cmd[0] = MA_CMD_EMPTY;
         ma_submit_cmd (ssm, device, cmd, 1);
         break;
-
     case DELETE_RECV_EMPTY:
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
-
     default:
         g_assert_not_reached ();
     }
@@ -810,13 +694,9 @@ static void
 delete_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
 {
     FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
-
     if (!error && self->resp_buf[MA_OVERHEAD] != 0x00) {
-        error = fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
-                                          "Delete Empty command failed: 0x%02x",
-                                          self->resp_buf[MA_OVERHEAD]);
+        error = fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL, "Delete Empty command failed");
     }
-
     fpi_device_delete_complete (device, error);
 }
 
