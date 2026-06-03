@@ -548,7 +548,7 @@ verify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
     /* Retrieve the actual print object being checked in this session */
     FpPrint *print = NULL;
     if (matched) {
-        print = fpi_device_get_verify_print (device);
+        print = (FpPrint *) fpi_device_get_current_action_data (device);
     }
 
     /* Pass the actual print object instead of NULL so PAM/sudo know who matched */
