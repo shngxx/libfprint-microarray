@@ -680,11 +680,14 @@ verify_run_state (FpiSsm *ssm, FpDevice *device)
             return;
         }
 
-        /* CMD 0x66 fid_hi fid_lo — verify against specific FID */
+        /* * MODIFICATION: Instead of targeting a single self->fid passed by PAM,
+         * we instruct the hardware to run a global search across all stored templates 
+         * by passing 0x00 0x00 as the slot target parameters.
+         */
         cmd[0] = MA_CMD_SEARCH;
         cmd[1] = 0x00;
         cmd[2] = 0x00;
-        
+
         ma_submit_cmd (ssm, device, cmd, 3);
         break;
     }
