@@ -673,25 +673,29 @@ verify_run_state (FpiSsm *ssm, FpDevice *device)
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
 
-    case VERIFY_SEARCH: {
+case VERIFY_SEARCH: {
         if (self->resp_buf[MA_OVERHEAD] != 0x00) {
             fpi_ssm_mark_failed (ssm,
                 fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL));
             return;
         }
+        /* Get FID from enrolled print */
+        FpPrint *print = NULL;
+        fpi_device_get_verify_data (device, &print);
+        GVariant *data = NULL;
+        g_object_get (print, "fpi-data", &data, NULL);
+        gint fid = 0;
+        g_variant_get (data, "(i)", &fid);
+        self->fid = fid;
 
-        /* * MODIFICATION: Instead of targeting a single self->fid passed by PAM,
-         * we instruct the hardware to run a global search across all stored templates 
-         * by passing 0x00 0x00 as the slot target parameters.
-         */
+        /* CMD 0x66 fid_hi fid_lo — verify against specific FID */
         cmd[0] = MA_CMD_SEARCH;
-        cmd[1] = 0x00;
-        cmd[2] = 0x00;
-
+        cmd[1] = (guint8)(self->fid >> 8);
+        cmd[2] = (guint8)(self->fid & 0xFF);
         ma_submit_cmd (ssm, device, cmd, 3);
         break;
     }
-
+    
     case VERIFY_RECV_SEARCH:
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
