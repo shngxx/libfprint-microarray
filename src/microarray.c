@@ -545,12 +545,11 @@ verify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
     /* Check if the chip gave us a 0x00 status indicating a hardware match */
     gboolean matched = (self->resp_buf[MA_OVERHEAD] == 0x00);
     
-    /* Use libfprint's matching enums instead of booleans */
-    FpMatchResult result = matched ? FPI_MATCH_SUCCESS : FPI_MATCH_FAIL;
+    /* 1. Fix the type name to use 'Fpi' instead of 'Fp' */
+    FpiMatchResult result = matched ? FPI_MATCH_SUCCESS : FPI_MATCH_FAIL;
 
-    /* Pass all 4 arguments expected by this libfprint version:
-     * (device, result, matched_print, gerror) */
-    fpi_device_verify_report (device, result, NULL);
+    /* 2. Fix the argument count: Provide exactly 4 arguments to stop the 'too few' error */
+    fpi_device_verify_report (device, result, NULL, NULL);
 
     fpi_device_verify_complete (device, NULL);
 }
