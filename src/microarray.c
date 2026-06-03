@@ -735,6 +735,58 @@ ma_verify (FpDevice *device)
 }
 
 /* --------------------------------------------------------------------------
+ * Delete state machine
+ * -------------------------------------------------------------------------- */
+
+enum {
+    DELETE_EMPTY,        /* CMD 0x0D — running onboard sensor flash format */
+    DELETE_RECV_EMPTY,
+    DELETE_NUM_STATES,
+};
+
+static void
+delete_run_state (FpiSsm *ssm, FpDevice *device)
+{
+    guint8 cmd[1];
+
+    switch (fpi_ssm_get_cur_state (ssm)) {
+
+    case DELETE_EMPTY:
+        cmd[0] = MA_CMD_EMPTY;
+        ma_submit_cmd (ssm, device, cmd, 1);
+        break;
+
+    case DELETE_RECV_EMPTY:
+        ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
+        break;
+
+    default:
+        g_assert_not_reached ();
+    }
+}
+
+static void
+delete_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
+{
+    FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
+
+    if (!error && self->resp_buf[MA_OVERHEAD] != 0x00) {
+        error = fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
+                                          "Delete Empty command failed: 0x%02x",
+                                          self->resp_buf[MA_OVERHEAD]);
+    }
+
+    fpi_device_delete_complete (device, error);
+}
+
+static void
+ma_delete (FpDevice *device)
+{
+    FpiSsm *ssm = fpi_ssm_new (device, delete_run_state, DELETE_NUM_STATES);
+    fpi_ssm_start (ssm, delete_ssm_done);
+}
+
+/* --------------------------------------------------------------------------
  * GObject boilerplate
  * -------------------------------------------------------------------------- */
 
@@ -779,6 +831,7 @@ fpi_device_microarray_class_init (FpiDeviceMicroarrayClass *klass)
     dev_class->close  = ma_dev_close;
     dev_class->enroll = ma_enroll;
     dev_class->verify = ma_verify;
+    dev_class->delete = ma_delete;
 
     fpi_device_class_auto_initialize_features (dev_class);
 }
