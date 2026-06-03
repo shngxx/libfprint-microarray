@@ -592,12 +592,17 @@ identify_run_state (FpiSsm *ssm, FpDevice *device)
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
     case IDENTIFY_GEN_CHAR:
-        if (self->resp_buf[MA_OVERHEAD] != 0x00) {
-            fp_dbg ("GetImage not ready, retrying");
-            fpi_ssm_jump_to_state (ssm, IDENTIFY_GET_IMAGE);
-            return;
+        /* FIX 1: Only check for image readiness if we actually just came from RECV_IMAGE.
+         * If we looped back here from CHECK_MATCH, resp_buf contains the SEARCH status instead! */
+        if (fpi_ssm_get_prev_state (ssm) == IDENTIFY_RECV_IMAGE) {
+            if (self->resp_buf[MA_OVERHEAD] != 0x00) {
+                fp_dbg ("GetImage not ready, retrying");
+                fpi_ssm_jump_to_state (ssm, IDENTIFY_GET_IMAGE);
+                return;
+            }
+            fpi_device_report_finger_status (device, FP_FINGER_STATUS_PRESENT);
         }
-        fpi_device_report_finger_status (device, FP_FINGER_STATUS_PRESENT);
+
         cmd[0] = MA_CMD_GEN_CHAR; cmd[1] = 0x01;
         ma_submit_cmd (ssm, device, cmd, 2);
         break;
@@ -617,12 +622,13 @@ identify_run_state (FpiSsm *ssm, FpDevice *device)
             return;
         }
 
-        /* Pull the fingerprint template profile at our current iteration index */
         FpPrint *print = g_ptr_array_index (prints, self->identify_index);
         GVariant *data = NULL;
         g_object_get (print, "fpi-data", &data, NULL);
         gint fid = 0;
         if (data) {
+            /* NOTE: Check your enroll/verify functions. If they pack data as a plain 
+             * integer instead of a tuple, change "(i)" to "i" here so fid doesn't default to 0. */
             g_variant_get (data, "(i)", &fid);
             g_variant_unref (data);
         }
@@ -648,9 +654,12 @@ identify_run_state (FpiSsm *ssm, FpDevice *device)
             GPtrArray *prints = NULL;
             fpi_device_get_identify_data (device, &prints);
             
-            /* If there are more registered prints left, loop back to search without re-imaging */
+            /* FIX 2: Loop back to IDENTIFY_GEN_CHAR instead of IDENTIFY_SEARCH.
+             * This forces the hardware to re-extract features from its persistent image buffer
+             * to clear out the wiped character cache before testing the next slot ID. */
             if (prints && self->identify_index < prints->len) {
-                fpi_ssm_jump_to_state (ssm, IDENTIFY_SEARCH);
+                fp_dbg ("Slot %d match failed. Re-extracting characteristics for next index...", self->fid);
+                fpi_ssm_jump_to_state (ssm, IDENTIFY_GEN_CHAR);
             } else {
                 fp_dbg ("Scan completed: No matching enrolled prints found.");
                 fpi_ssm_mark_completed (ssm);
