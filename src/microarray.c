@@ -714,7 +714,23 @@ static void
 ma_identify (FpDevice *device)
 {
     FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
-    self->identify_index = 0; /* Clear previous iteration trackers */
+    GPtrArray *prints = NULL;
+
+    /* Fetch the array of templates passed down by the system */
+    fpi_device_get_identify_data (device, &prints);
+
+    /* FIX: If this is a fresh install or the user has no enrolled prints,
+     * short-circuit the hardware state machine entirely. Report a clean 
+     * "No Match" so fprintd's de-duplication check passes successfully. */
+    if (!prints || prints->len == 0) {
+        fp_dbg ("No templates enrolled on the system. Skipping hardware search loop.");
+        fpi_device_identify_report (device, NULL, NULL, NULL);
+        fpi_device_identify_complete (device, NULL);
+        return;
+    }
+
+    /* Reset loop index and start the state machine for actual hardware matching */
+    self->identify_index = 0; 
     FpiSsm *ssm = fpi_ssm_new (device, identify_run_state, IDENTIFY_NUM_STATES);
     fpi_ssm_start (ssm, identify_ssm_done);
 }
