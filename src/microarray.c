@@ -592,9 +592,10 @@ identify_run_state (FpiSsm *ssm, FpDevice *device)
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
     case IDENTIFY_GEN_CHAR:
-        /* FIX 1: Only check for image readiness if we actually just came from RECV_IMAGE.
-         * If we looped back here from CHECK_MATCH, resp_buf contains the SEARCH status instead! */
-        if (fpi_ssm_get_prev_state (ssm) == IDENTIFY_RECV_IMAGE) {
+        /* FIX: libfprint doesn't track previous states natively. 
+         * Instead, check our loop tracker: if identify_index is 0, this is the 
+         * initial run coming straight from a brand-new image capture. */
+        if (self->identify_index == 0) {
             if (self->resp_buf[MA_OVERHEAD] != 0x00) {
                 fp_dbg ("GetImage not ready, retrying");
                 fpi_ssm_jump_to_state (ssm, IDENTIFY_GET_IMAGE);
@@ -603,6 +604,9 @@ identify_run_state (FpiSsm *ssm, FpDevice *device)
             fpi_device_report_finger_status (device, FP_FINGER_STATUS_PRESENT);
         }
 
+        cmd[0] = MA_CMD_GEN_CHAR; cmd[1] = 0x01;
+        ma_submit_cmd (ssm, device, cmd, 2);
+        break;
         cmd[0] = MA_CMD_GEN_CHAR; cmd[1] = 0x01;
         ma_submit_cmd (ssm, device, cmd, 2);
         break;
