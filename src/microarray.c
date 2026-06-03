@@ -542,8 +542,12 @@ verify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
         return;
     }
 
+    /* 0x00 from the chip indicates a successful hardware match */
     gboolean matched = (self->resp_buf[MA_OVERHEAD] == 0x00);
-    fpi_device_verify_report (device, matched ? FP_VERIFY_MATCH : FP_VERIFY_RETRY, NULL, NULL, NULL);
+    
+    /* libfprint expects just the device and a boolean (TRUE for match, FALSE for retry) */
+    fpi_device_verify_report (device, matched);
+    
     fpi_device_verify_complete (device, NULL);
 }
 
