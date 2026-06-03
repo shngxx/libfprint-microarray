@@ -548,8 +548,9 @@ verify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
     /* Use libfprint's matching enums instead of booleans */
     FpMatchResult result = matched ? FPI_MATCH_SUCCESS : FPI_MATCH_FAIL;
 
-    /* Pass the device, the enum result, and NULL for the extra driver data */
-    fpi_device_verify_report (device, result, NULL);
+/* Pass all 4 arguments expected by this libfprint version:
+     * (device, result, matched_print, gerror) */
+    fpi_device_verify_report (device, result, NULL, NULL);
     
     fpi_device_verify_complete (device, NULL);
 }
