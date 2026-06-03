@@ -109,7 +109,8 @@ ma_build_cmd (const guint8 *cmd, gsize cmd_len, gsize *out_len)
     return pkt;
 }
 
-static gboolean
+/* Suppressed unused warning so the compiler doesn't fail on -Werror */
+static G_GNUC_UNUSED gboolean
 ma_parse_resp (const guint8 *buf, gsize buf_len,
                const guint8 **data_out, gsize *data_len_out,
                GError **error)
@@ -545,10 +546,13 @@ verify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
     gboolean matched = (self->resp_buf[MA_OVERHEAD] == 0x00);
     FpiMatchResult result = matched ? FPI_MATCH_SUCCESS : FPI_MATCH_FAIL;
 
-    /* Retrieve the actual print object being checked in this session */
     FpPrint *print = NULL;
     if (matched) {
-        print = (FpPrint *) fpi_device_get_current_action_data (device);
+        /* USE THE WORKING NATIVE GETTER! 
+         * Since we know fpi_device_get_verify_data works flawlessly in your 
+         * VERIFY_SEARCH block, we can just call it here to retrieve the template!
+         */
+        fpi_device_get_verify_data (device, &print);
     }
 
     /* Pass the actual print object instead of NULL so PAM/sudo know who matched */
