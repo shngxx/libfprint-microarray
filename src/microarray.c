@@ -74,6 +74,7 @@ struct _FpiDeviceMicroarray
   guint8        *resp_buf;         /* allocated response buffer    */
   GCancellable  *interrupt_cancellable;
   gboolean       waiting_for_lift; /* TRUE after each successful capture */
+  guint          identify_index;
 };
 
 G_DECLARE_FINAL_TYPE (FpiDeviceMicroarray, fpi_device_microarray,
@@ -572,6 +573,7 @@ enum {
     IDENTIFY_RECV_GEN_CHAR,
     IDENTIFY_SEARCH,
     IDENTIFY_RECV_SEARCH,
+    IDENTIFY_CHECK_MATCH,
     IDENTIFY_NUM_STATES,
 };
 
@@ -602,17 +604,60 @@ identify_run_state (FpiSsm *ssm, FpDevice *device)
     case IDENTIFY_RECV_GEN_CHAR:
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
-    case IDENTIFY_SEARCH:
+    case IDENTIFY_SEARCH: {
         if (self->resp_buf[MA_OVERHEAD] != 0x00) {
             fpi_ssm_mark_failed (ssm, fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL));
             return;
         }
-        cmd[0] = MA_CMD_SEARCH; cmd[1] = 0x00; cmd[2] = 0x00;   
+
+        GPtrArray *prints = NULL;
+        fpi_device_get_identify_data (device, &prints);
+        if (!prints || self->identify_index >= prints->len) {
+            fpi_ssm_mark_failed (ssm, fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL, "No templates to check"));
+            return;
+        }
+
+        /* Pull the fingerprint template profile at our current iteration index */
+        FpPrint *print = g_ptr_array_index (prints, self->identify_index);
+        GVariant *data = NULL;
+        g_object_get (print, "fpi-data", &data, NULL);
+        gint fid = 0;
+        if (data) {
+            g_variant_get (data, "(i)", &fid);
+            g_variant_unref (data);
+        }
+        self->fid = fid;
+        fp_dbg ("Searching hardware memory slot ID: %d (Index %d/%d)", self->fid, self->identify_index + 1, prints->len);
+
+        cmd[0] = MA_CMD_SEARCH; 
+        cmd[1] = (guint8)(self->fid >> 8); 
+        cmd[2] = (guint8)(self->fid & 0xFF);   
         ma_submit_cmd (ssm, device, cmd, 3);
         break;
+    }
     case IDENTIFY_RECV_SEARCH:
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
+    case IDENTIFY_CHECK_MATCH: {
+        guint8 status = self->resp_buf[MA_OVERHEAD];
+        if (status == 0x00) {
+            fp_dbg ("Hardware match verified on slot ID %d!", self->fid);
+            fpi_ssm_mark_completed (ssm);
+        } else {
+            self->identify_index++;
+            GPtrArray *prints = NULL;
+            fpi_device_get_identify_data (device, &prints);
+            
+            /* If there are more registered prints left, loop back to search without re-imaging */
+            if (prints && self->identify_index < prints->len) {
+                fpi_ssm_jump_to_state (ssm, IDENTIFY_SEARCH);
+            } else {
+                fp_dbg ("Scan completed: No matching enrolled prints found.");
+                fpi_ssm_mark_completed (ssm);
+            }
+        }
+        break;
+    }
     default:
         g_assert_not_reached ();
     }
@@ -629,30 +674,12 @@ identify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
         return;
     }
 
-    guint8 status = self->resp_buf[MA_OVERHEAD];
-    if (status == 0x00) {
-        gint matched_fid = ((gint)self->resp_buf[MA_OVERHEAD + 1] << 8) | (gint)self->resp_buf[MA_OVERHEAD + 2];
-        fp_dbg ("Hardware match found on storage slot ID: %d", matched_fid);
-
+    if (self->resp_buf[MA_OVERHEAD] == 0x00) {
         GPtrArray *prints = NULL;
-        FpPrint *match = NULL;
         fpi_device_get_identify_data (device, &prints);
-
-        for (guint i = 0; i < prints->len; i++) {
-            FpPrint *print = g_ptr_array_index (prints, i);
-            GVariant *data = NULL;
-            g_object_get (print, "fpi-data", &data, NULL);
-            if (data) {
-                gint fid = -1;
-                g_variant_get (data, "(i)", &fid);
-                g_variant_unref (data);
-                if (fid == matched_fid) {
-                    match = print;
-                    break;
-                }
-            }
-        }
-        if (match) {
+        
+        if (prints && self->identify_index < prints->len) {
+            FpPrint *match = g_ptr_array_index (prints, self->identify_index);
             fpi_device_identify_report (device, match, NULL, NULL);
         } else {
             fpi_device_identify_report (device, NULL, NULL, NULL);
@@ -673,6 +700,8 @@ ma_verify (FpDevice *device)
 static void
 ma_identify (FpDevice *device)
 {
+    FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
+    self->identify_index = 0; /* Clear previous iteration trackers */
     FpiSsm *ssm = fpi_ssm_new (device, identify_run_state, IDENTIFY_NUM_STATES);
     fpi_ssm_start (ssm, identify_ssm_done);
 }
