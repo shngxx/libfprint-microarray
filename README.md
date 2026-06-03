@@ -62,6 +62,7 @@ sudo apt install -y git build-essential meson ninja-build \
   libgirepository1.0-dev gtk-doc-tools \
   fprintd libpam-fprintd
   ```
+If you are on Ubuntu 25.4 or later you also need to run ```sudo apt install systemd-dev```
 
 3. Clone the official libfprint source code to ~/libfprint directory
 
