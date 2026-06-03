@@ -631,13 +631,13 @@ ma_enroll (FpDevice *device)
  * -------------------------------------------------------------------------- */
 
 enum {
-    VERIFY_GET_IMAGE,
-    VERIFY_RECV_IMAGE,
-    VERIFY_GEN_CHAR,
-    VERIFY_RECV_GEN_CHAR,
-    VERIFY_SEARCH,
-    VERIFY_RECV_SEARCH,
-    VERIFY_NUM_STATES,
+    IDENTIFY_GET_IMAGE,
+    IDENTIFY_RECV_IMAGE,
+    IDENTIFY_GEN_CHAR,
+    IDENTIFY_RECV_GEN_CHAR,
+    IDENTIFY_SEARCH,
+    IDENTIFY_RECV_SEARCH,
+    IDENTIFY_NUM_STATES,
 };
 
 static void
@@ -648,19 +648,19 @@ identify_run_state (FpiSsm *ssm, FpDevice *device)
 
     switch (fpi_ssm_get_cur_state (ssm)) {
 
-    case VERIFY_GET_IMAGE:
+    case IDENTIFY_GET_IMAGE:
         cmd[0] = MA_CMD_GET_IMAGE;
         ma_submit_cmd (ssm, device, cmd, 1);
         break;
 
-    case VERIFY_RECV_IMAGE:
+    case IDENTIFY_RECV_IMAGE:
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
 
-    case VERIFY_GEN_CHAR:
+    case IDENTIFY_GEN_CHAR:
         if (self->resp_buf[MA_OVERHEAD] != 0x00) {
             fp_dbg ("GetImage not ready, retrying");
-            fpi_ssm_jump_to_state (ssm, VERIFY_GET_IMAGE);
+            fpi_ssm_jump_to_state (ssm, IDENTIFY_GET_IMAGE);
             return;
         }
         fpi_device_report_finger_status (device, FP_FINGER_STATUS_PRESENT);
@@ -673,13 +673,12 @@ identify_run_state (FpiSsm *ssm, FpDevice *device)
         ma_submit_recv (ssm, device, MA_OVERHEAD + 3 + 2);
         break;
 
-    case IDENTIFY_SEARCH: 
+    case IDENTIFY_SEARCH:
         if (self->resp_buf[MA_OVERHEAD] != 0x00) {
-            fpi_ssm_mark_failed (ssm,
-                fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL));
+            fpi_ssm_mark_failed (ssm, fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL));
             return;
         }
-        
+
         /* Global database search command parameter payload */
         cmd[0] = MA_CMD_SEARCH;
         cmd[1] = 0x00;   /* 0x00 0x00 instructs firmware to scan slots 0-9 */
@@ -710,7 +709,7 @@ identify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
     }
 
     guint8 status = self->resp_buf[MA_OVERHEAD];
-
+    
     if (status == 0x00) {
         /* Success! The chip matched a finger.
          * The firmware response packet structure contains the matched slot ID:
@@ -762,12 +761,10 @@ identify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
 }
 
 static void
-ma_verify (FpDevice *device)
+ma_identify (FpDevice *device)
 {
-    FpiDeviceMicroarray *self = FPI_DEVICE_MICROARRAY (device);
-    self->fid = -1;
     FpiSsm *ssm = fpi_ssm_new (device, identify_run_state, IDENTIFY_NUM_STATES);
-    fpi_ssm_start (ssm, verify_ssm_done);
+    fpi_ssm_start (ssm, identify_ssm_done);
 }
 
 /* --------------------------------------------------------------------------
