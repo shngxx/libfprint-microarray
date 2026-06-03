@@ -679,19 +679,12 @@ verify_run_state (FpiSsm *ssm, FpDevice *device)
                 fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL));
             return;
         }
-        /* Get FID from enrolled print */
-        FpPrint *print = NULL;
-        fpi_device_get_verify_data (device, &print);
-        GVariant *data = NULL;
-        g_object_get (print, "fpi-data", &data, NULL);
-        gint fid = 0;
-        g_variant_get (data, "(i)", &fid);
-        self->fid = fid;
 
         /* CMD 0x66 fid_hi fid_lo — verify against specific FID */
         cmd[0] = MA_CMD_SEARCH;
-        cmd[1] = (guint8)(self->fid >> 8);
-        cmd[2] = (guint8)(self->fid & 0xFF);
+        cmd[1] = 0x00;
+        cmd[2] = 0x00;
+        
         ma_submit_cmd (ssm, device, cmd, 3);
         break;
     }
