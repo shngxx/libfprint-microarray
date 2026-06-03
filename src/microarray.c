@@ -542,15 +542,18 @@ verify_ssm_done (FpiSsm *ssm, FpDevice *device, GError *error)
         return;
     }
 
-    /* Check if the chip gave us a 0x00 status indicating a hardware match */
     gboolean matched = (self->resp_buf[MA_OVERHEAD] == 0x00);
-    
-    /* 1. Fix the type name to use 'Fpi' instead of 'Fp' */
     FpiMatchResult result = matched ? FPI_MATCH_SUCCESS : FPI_MATCH_FAIL;
 
-    /* 2. Fix the argument count: Provide exactly 4 arguments to stop the 'too few' error */
-    fpi_device_verify_report (device, result, NULL, NULL);
+    /* Retrieve the actual print object being checked in this session */
+    FpPrint *print = NULL;
+    if (matched) {
+        print = fpi_device_get_verify_print (device);
+    }
 
+    /* Pass the actual print object instead of NULL so PAM/sudo know who matched */
+    fpi_device_verify_report (device, result, print, NULL);
+    
     fpi_device_verify_complete (device, NULL);
 }
 
